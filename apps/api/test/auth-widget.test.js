@@ -44,6 +44,15 @@ test('widget stays hidden until published, then serves config', async () => {
   assert.equal((await j(`/widget/config?key=wk_wrong&parent=https://example.com`)).status, 404);
 });
 
+test('the site loads its own published widget automatically', async () => {
+  await j('/admin/widget', { method: 'PUT', auth: token, body: { enabled: false, name: 'Demo Bank Help', color: '#155EEF', allowedDomains: '' } });
+  assert.equal((await j('/widget/default')).status, 404);
+  await j('/admin/widget', { method: 'PUT', auth: token, body: { enabled: true, name: 'Demo Bank Help', color: '#155EEF', allowedDomains: '' } });
+  const d = await (await j('/widget/default')).json();
+  assert.equal(d.key, key);
+  assert.match(d.scriptUrl, /\/widget\.js$/);
+});
+
 test('widget.js is served so other websites can load it, and unpublishing hides the widget', async () => {
   const r = await fetch(origin + '/widget.js');
   assert.equal(r.status, 200);

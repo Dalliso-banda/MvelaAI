@@ -12,6 +12,7 @@ import Login from './pages/Login';
 import Embed from './pages/Embed';
 import Widget from './pages/dashboard/Widget';
 import { Protected } from './auth';
+import WidgetLoader from './components/WidgetLoader';
 import HowItWorks from './pages/HowItWorks';
 import Industries from './pages/Industries';
 import Security from './pages/Security';
@@ -20,6 +21,8 @@ import Contact from './pages/Contact';
 
 export default function App() {
   return (
+    <>
+    <WidgetLoader />
     <Routes>
       <Route element={<MarketingLayout />}>
         <Route path="/" element={<Home />} />
@@ -42,5 +45,6 @@ export default function App() {
         <Route path="*" element={<ComingSoon title="This screen is next" />} />
       </Route>
     </Routes>
+    </>
   );
 }

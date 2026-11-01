@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { db, now, audit } from './db.js';
 import { runTool } from './tools.js';
 import { redact, riskCheck, detectIntent, detectLanguage, extractPhone, extractOtp, TOPIC_BY_INTENT, scrubOutput } from './guardrails.js';
-import { llmEnabled, runLLM } from './llm.js';
+import { llmEnabled, llmProvider, runLLM } from './llm.js';
 
 const BUSINESS = () => process.env.BUSINESS_NAME || 'Demo Bank Zambia';
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -146,15 +146,32 @@ async function verifiedAnswer(conv, text) {
       const out = await runLLM({ history, ctx, name: customer.name, language: conv.language, business: BUSINESS() });
       const intent = detectIntent(text);
       const escalated = ctx.used.includes('escalate_to_human');
-      audit(conv.id, conv.customer_id, 'ai', 'reply', { mode: 'gemini', tools: ctx.used });
+      audit(conv.id, conv.customer_id, 'ai', 'reply', { mode: llmProvider(), tools: ctx.used });
       return { text: out, topic: TOPIC_BY_INTENT[intent], answered: !escalated, escalated };
     } catch (e) {
       audit(conv.id, conv.customer_id, 'system', 'llm_error_fallback', { error: String(e.message).slice(0, 200) });
+      console.warn('[llm] FELL BACK to the rules agent:', e.message);
     }
   }
   const r = rulesAnswer(conv, text);
   audit(conv.id, conv.customer_id, 'ai', 'reply', { mode: 'rules' });
   return r;
+}
+
+// Before verification the model gets no account tools, only the public knowledge base and escalation.
+async function publicAnswer(conv) {
+  if (!llmEnabled()) return null;
+  const ctx = { conversationId: conv.id, customerId: null, used: [] };
+  try {
+    const history = db.prepare("SELECT role, content FROM messages WHERE conversation_id=? AND kind='chat' ORDER BY id DESC LIMIT 12").all(conv.id).reverse();
+    const text = await runLLM({ history, ctx, name: 'a visitor', language: conv.language, business: BUSINESS(), publicMode: true });
+    audit(conv.id, null, 'ai', 'reply', { mode: llmProvider(), public: true, tools: ctx.used });
+    return { text, escalated: ctx.used.includes('escalate_to_human') };
+  } catch (e) {
+    audit(conv.id, null, 'system', 'llm_error_fallback', { error: String(e.message).slice(0, 200), public: true });
+    console.warn('[llm] FELL BACK to the scripted reply (public mode):', e.message);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- main entry
@@ -208,10 +225,25 @@ export async function handleMessage(conversationId, rawText) {
         audit(conv.id, null, 'ai', 'reply', { mode: 'kb_public' });
         reply = { text: kbHit[0].answer, kind: 'chat', topic: 'General enquiry', answered: true };
       } else {
-        addMessage(conv.id, 'customer', 'flow', storedText);
-        if (accountish) patch(conv.id, { pending_message: safe, topic: TOPIC_BY_INTENT[intent] });
-        patch(conv.id, { state: 'awaiting_phone' });
-        reply = { text: accountish ? "I can help with that. First I need to verify it's you. What mobile number is registered on your account? (e.g. 0976 000 001)" : "I can help with that once I've verified you. What mobile number is registered on your account? (e.g. 0976 000 001)", kind: 'flow' };
+        const useLLM = !accountish && intent !== 'thanks' && llmEnabled();
+        addMessage(conv.id, 'customer', useLLM ? 'chat' : 'flow', storedText);
+        const smart = useLLM ? await publicAnswer(conv) : null;
+        if (smart) {
+          reply = { text: smart.text, kind: 'chat', topic: TOPIC_BY_INTENT[intent], answered: !smart.escalated, escalated: smart.escalated };
+        } else if (accountish) {
+          patch(conv.id, { pending_message: safe, topic: TOPIC_BY_INTENT[intent], state: 'awaiting_phone' });
+          reply = { text: "I can help with that. First I need to verify it's you. What mobile number is registered on your account? (e.g. 0976 000 001)", kind: 'flow' };
+        } else if (intent === 'greeting' || intent === 'thanks') {
+          const GREETINGS = [
+            'Hello! I can check your balance, recent transactions and failed or pending transfers, or answer general questions. What would you like help with?',
+            "Hi there. What can I help you with today? Try something like 'what is my balance' or 'my transfer failed'.",
+            "Hello again. Just tell me what you need, and if it's about your account I'll verify you first.",
+          ];
+          const n = db.prepare("SELECT COUNT(*) c FROM messages WHERE conversation_id=? AND role='customer'").get(conv.id).c;
+          reply = { text: intent === 'thanks' ? "You're welcome! Is there anything else I can help with?" : GREETINGS[(n - 1) % GREETINGS.length], kind: 'flow' };
+        } else {
+          reply = { text: "I couldn't find that in our general information. If it's about your account, tell me the mobile number registered on it and I'll verify you first. Or say 'speak to a human' and I'll pass you to an agent.", kind: 'flow' };
+        }
       }
     }
   }

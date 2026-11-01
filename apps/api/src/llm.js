@@ -3,9 +3,38 @@
 import { TOOL_DECLARATIONS, runTool } from './tools.js';
 import { scrubOutput } from './guardrails.js';
 
-export const llmEnabled = () => Boolean(process.env.GEMINI_API_KEY);
+// Provider is chosen from the environment: Meta's Muse Spark first (hackathon), then Gemini, else the rules agent.
+// Force one with LLM_PROVIDER=muse|gemini.
+export function llmProvider() {
+  const forced = (process.env.LLM_PROVIDER || '').toLowerCase();
+  if (forced === 'muse' && process.env.META_API_KEY) return 'muse';
+  if (forced === 'gemini' && process.env.GEMINI_API_KEY) return 'gemini';
+  if (forced) return null;
+  if (process.env.META_API_KEY) return 'muse';
+  if (process.env.GEMINI_API_KEY) return 'gemini';
+  return null;
+}
+export const llmEnabled = () => llmProvider() !== null;
+export const llmLabel = () => {
+  const p = llmProvider();
+  return p === 'muse' ? `Meta Muse (${process.env.META_MODEL || 'muse-spark-1.1'})` : p === 'gemini' ? `Gemini (${process.env.GEMINI_MODEL || 'gemini-2.5-flash'})` : 'rules (set META_API_KEY or GEMINI_API_KEY for the LLM)';
+};
 
-function systemPrompt({ business, name, language }) {
+// Before a customer is verified the model gets NO account tools, only these two.
+const PUBLIC_TOOLS = new Set(['search_knowledge', 'escalate_to_human']);
+const toolsFor = (publicMode) => (publicMode ? TOOL_DECLARATIONS.filter((d) => PUBLIC_TOOLS.has(d.name)) : TOOL_DECLARATIONS);
+
+function systemPrompt({ business, name, language, publicMode }) {
+  if (publicMode) {
+    return `You are Mvela, the friendly AI customer care assistant for ${business} in Zambia. Today is ${new Date().toDateString()}.
+The person you are talking to has NOT been verified yet, so you cannot see any account information.
+
+Rules you must always follow:
+- Reply in the language the person writes in (English, Bemba or Nyanja). Last detected language: ${language}. Keep replies short, warm and natural. Greetings and small talk ("how are you") are fine: answer like a kind person, then gently offer help.
+- For questions about the bank (fees, limits, opening hours, how-tos, security tips) call search_knowledge and answer ONLY from what it returns. If nothing relevant comes back, say you don't have that information and offer to pass them to a human agent. Never guess or invent.
+- You can help with account questions (balance, transactions, failed transfers, cards) once they are verified. If they want that, tell them to type the mobile number registered on their account and the system will send them a one-time code. Do not claim you have already sent a code, and never ask for a PIN, password or full card number.
+- Fraud or suspected fraud (priority high), complaints, card blocking, or a request for a human: call escalate_to_human.`;
+  }
   return `You are Mvela, the AI customer care assistant for ${business} in Zambia. Today is ${new Date().toDateString()}.
 You are speaking with ${name}, whose identity has ALREADY been verified by one-time code.
 
@@ -19,7 +48,7 @@ Rules you must always follow:
 - If the tool says nothing was found, say so plainly rather than speculating.`;
 }
 
-export async function runLLM({ history, ctx, name, language, business }) {
+async function runGemini({ history, ctx, name, language, business, publicMode }) {
   const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -42,9 +71,9 @@ export async function runLLM({ history, ctx, name, language, business }) {
         method: 'POST', signal: ctrl.signal,
         headers: { 'content-type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt({ business, name, language }) }] },
+          systemInstruction: { parts: [{ text: systemPrompt({ business, name, language, publicMode }) }] },
           contents,
-          tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+          tools: [{ functionDeclarations: toolsFor(publicMode) }],
           generationConfig: { temperature: 0.3, maxOutputTokens: 600 },
         }),
       });
@@ -67,4 +96,54 @@ export async function runLLM({ history, ctx, name, language, business }) {
     });
   }
   throw new Error('Too many tool rounds');
+}
+
+// ---------------------------------------------------------------------------------------------
+// Meta Model API (Muse Spark). OpenAI-compatible chat completions with function calling.
+// Docs: https://ai.developer.meta.com/docs/  (base URL https://api.meta.ai/v1)
+async function runMuse({ history, ctx, name, language, business, publicMode }) {
+  const base = (process.env.META_API_BASE || 'https://api.meta.ai/v1').replace(/\/$/, '');
+  const model = process.env.META_MODEL || 'muse-spark-1.1';
+  const tools = toolsFor(publicMode).map((d) => ({ type: 'function', function: { name: d.name, description: d.description, parameters: d.parameters } }));
+  const messages = [{ role: 'system', content: systemPrompt({ business, name, language, publicMode }) }];
+  for (const m of history) messages.push({ role: m.role === 'customer' ? 'user' : 'assistant', content: m.content });
+  if (messages.length === 1 || messages[1].role !== 'user') messages.splice(1, 0, { role: 'user', content: '(conversation started)' });
+
+  for (let round = 0; round < 5; round++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    let data;
+    try {
+      const res = await fetch(`${base}/chat/completions`, {
+        method: 'POST', signal: ctrl.signal,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.META_API_KEY}` },
+        body: JSON.stringify({
+          model, messages, tools, tool_choice: 'auto', temperature: 0.3, max_tokens: 600,
+          ...(process.env.META_REASONING_EFFORT ? { reasoning_effort: process.env.META_REASONING_EFFORT } : {}),
+        }),
+      });
+      if (!res.ok) throw new Error(`Muse ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      data = await res.json();
+    } finally { clearTimeout(timer); }
+
+    const msg = data.choices?.[0]?.message;
+    if (!msg) throw new Error('Muse returned no message');
+    const calls = msg.tool_calls || [];
+    if (!calls.length) {
+      const text = (typeof msg.content === 'string' ? msg.content : (msg.content || []).map((p) => p.text || '').join('')).trim();
+      if (!text) throw new Error('Muse returned no text');
+      return scrubOutput(text);
+    }
+    messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: calls });
+    for (const c of calls) {
+      let args = {};
+      try { args = JSON.parse(c.function?.arguments || '{}'); } catch { /* model sent bad JSON: run the tool with no args */ }
+      messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(runTool(c.function?.name, args, ctx)) });
+    }
+  }
+  throw new Error('Too many tool rounds');
+}
+
+export async function runLLM(args) {
+  return llmProvider() === 'muse' ? runMuse(args) : runGemini(args);
 }

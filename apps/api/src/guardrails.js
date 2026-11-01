@@ -18,7 +18,15 @@ export function extractPhone(text) {
   return null;
 }
 
-export const extractOtp = (text) => (String(text || '').match(/\b\d{6}\b/) || [])[0] || null;
+export function extractOtp(text) {
+  const t = String(text || '');
+  const m = t.match(/\b\d{6}\b/);
+  if (m) return m[0];
+  // Speech-to-text often returns digits spaced out ("3 5 3 0 1 2" or "353 012"). Only accept
+  // this when the whole message is just digits, so ordinary sentences are never misread.
+  if (/^[\d\s-]+$/.test(t.trim())) { const d = t.replace(/\D/g, ''); if (d.length === 6) return d; }
+  return null;
+}
 
 /** Remove card numbers, PINs and passwords before anything is stored or sent to an LLM. */
 export function redact(text) {

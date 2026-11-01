@@ -2,7 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { db, now, audit } from './db.js';
 import { createConversation, handleMessage } from './agent.js';
-import { llmEnabled } from './llm.js';
+import { llmEnabled, llmProvider } from './llm.js';
 import { DEMO_CUSTOMERS, seedAll } from './seed.js';
 import { authRouter, requireAuth } from './auth.js';
 import { widgetAdmin, widgetPublic } from './widget.js';
@@ -13,7 +13,7 @@ const int = (v, d, min, max) => Math.min(Math.max(parseInt(v, 10) || d, min), ma
 
 r.get('/health', (_req, res) => {
   let dbOk = true; try { db.prepare('SELECT 1').get(); } catch { dbOk = false; }
-  res.json({ status: dbOk ? 'ok' : 'degraded', service: 'mvela-api', db: dbOk, agent: llmEnabled() ? 'gemini' : 'rules', time: now() });
+  res.json({ status: dbOk ? 'ok' : 'degraded', service: 'mvela-api', db: dbOk, agent: llmProvider() || 'rules', time: now() });
 });
 
 // ------------------------------------------------------------------ public: customer chat

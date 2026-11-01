@@ -24,7 +24,8 @@ const hostAllowed = (r, parent) => {
   try { const h = new URL(parent).hostname.toLowerCase(); return list.some((d) => h === d || h.endsWith('.' + d)); } catch { return false; }
 };
 const webOrigin = () => (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',')[0].trim();
-const apiOrigin = (req) => (process.env.PUBLIC_API_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+// In development the dashboard reaches the API through a proxy, so point the snippet straight at the API port.
+const apiOrigin = (req) => (process.env.PUBLIC_API_URL || (process.env.NODE_ENV === 'production' ? `${req.protocol}://${req.get('host')}` : `http://localhost:${process.env.PORT || 4000}`)).replace(/\/$/, '');
 const shape = (r, req) => ({ key: r.widget_key, enabled: !!r.enabled, name: r.name, color: r.color, allowedDomains: domainList(r), scriptUrl: `${apiOrigin(req)}/widget.js`, updatedAt: r.updated_at });
 
 // Public: the embed script asks this before showing anything on a customer's website.
@@ -34,6 +35,13 @@ widgetPublic.get('/widget/config', cors({ origin: '*' }), (req, res) => {
   if (String(req.query.key || '') !== r.widget_key || !r.enabled) return res.status(404).json({ error: 'Widget not available.' });
   if (!hostAllowed(r, String(req.query.parent || ''))) return res.status(403).json({ error: 'This website is not allowed to show the widget.' });
   res.json({ name: r.name, color: r.color, embedUrl: `${webOrigin()}/embed?key=${r.widget_key}` });
+});
+
+// Public: lets this product's own website load its widget automatically once it is published.
+widgetPublic.get('/widget/default', (req, res) => {
+  const r = settings();
+  if (!r.enabled) return res.status(404).json({ error: 'Widget not published.' });
+  res.json({ key: r.widget_key, scriptUrl: `${apiOrigin(req)}/widget.js` });
 });
 
 // Admin (behind requireAuth): view, edit and publish.
