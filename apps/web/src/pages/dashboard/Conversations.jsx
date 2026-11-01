@@ -36,7 +36,7 @@ function Detail({ id, onClose }) {
             <Stack spacing={.75}>
               {c.audit.map((a, i) => (
                 <Typography key={i} sx={{ fontSize: 13, fontFamily: 'monospace', color: tk.n700 }}>
-                  {new Date(a.createdAt).toLocaleTimeString()} · {a.actor} · {a.action}{a.detail?.tools?.length ? ` [${a.detail.tools.join(', ')}]` : ''}
+                  {new Date(a.createdAt).toLocaleTimeString()} · {a.actor} · {a.action}{a.detail?.mode ? ` (${a.detail.mode})` : ''}{a.detail?.tools?.length ? ` [${a.detail.tools.join(', ')}]` : ''}
                 </Typography>
               ))}
             </Stack>

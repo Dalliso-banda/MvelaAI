@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import routes from './routes.js';
 import { seedAll } from './seed.js';
-import { llmEnabled } from './llm.js';
+import { llmEnabled, llmLabel } from './llm.js';
 import fs from 'node:fs';
 import { bootstrapOwner } from './auth.js';
 
@@ -35,7 +35,7 @@ if (process.env.NODE_ENV !== 'test') {
   seedAll();
   const PORT = process.env.PORT || 4000;
   createApp().listen(PORT, () => {
-    console.log(`Mvela API on http://localhost:${PORT}  |  agent: ${llmEnabled() ? 'Gemini (' + (process.env.GEMINI_MODEL || 'gemini-2.5-flash') + ')' : 'rules (set GEMINI_API_KEY for the LLM)'}`);
+    console.log(`Mvela API on http://localhost:${PORT}  |  agent: ${llmLabel()}`);
     if (process.env.OTP_DEMO !== 'false') console.log('OTP_DEMO is on: codes are shown in chat. Turn off before real use.');
   });
 }

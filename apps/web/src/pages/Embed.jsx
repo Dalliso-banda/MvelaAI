@@ -3,6 +3,7 @@ import { Box, Typography, TextField, IconButton, Stack } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import CloseIcon from '@mui/icons-material/Close';
 import { api } from '../api';
+import VoiceCall from '../components/VoiceCall';
 
 const q = new URLSearchParams(window.location.search);
 const KEY = q.get('key') || '';
@@ -35,14 +36,19 @@ export default function Embed() {
   }, []);
   useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [msgs, busy]);
 
-  async function send(e) {
-    e.preventDefault();
-    const t = text.trim(); if (!t || busy || !conv) return;
-    setText(''); setBusy(true); setMsgs((m) => [...m, { role: 'customer', content: t }]);
+  async function submit(t) {
+    if (!t || busy || !conv) return '';
+    setBusy(true); setMsgs((m) => [...m, { role: 'customer', content: t }]);
     try {
       const r = await api('/api/chat', { method: 'POST', body: { conversationId: conv, message: t } });
       setMsgs((m) => [...m, ...(r.warning ? [{ role: 'assistant', content: r.warning }] : []), { role: 'assistant', content: r.reply }]);
-    } catch (x) { setMsgs((m) => [...m, { role: 'system', content: x.message }]); } finally { setBusy(false); }
+      return r.reply;
+    } catch (x) { setMsgs((m) => [...m, { role: 'system', content: x.message }]); return ''; } finally { setBusy(false); }
+  }
+  async function send(e) {
+    e.preventDefault();
+    const t = text.trim(); if (!t) return;
+    setText(''); await submit(t);
   }
   const close = () => window.parent !== window && window.parent.postMessage('mvela-close', PARENT || '*');
 
@@ -65,6 +71,7 @@ export default function Embed() {
           <div ref={end} />
         </Stack>
       </Box>
+      <VoiceCall onUtterance={submit} color={c} disabled={!conv} />
       <Stack direction="row" spacing={1} component="form" onSubmit={send} sx={{ p: 1.5, borderTop: '1px solid #E2E8F0' }}>
         <TextField value={text} onChange={(e) => setText(e.target.value)} placeholder="Type your message…" size="small" fullWidth autoComplete="off" inputProps={{ 'aria-label': 'Message', maxLength: 1000, style: { fontSize: 16 } }} />
         <IconButton type="submit" disabled={busy || !text.trim()} aria-label="Send" sx={{ color: c }}><SendIcon /></IconButton>
