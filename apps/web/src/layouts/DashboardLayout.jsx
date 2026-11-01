@@ -13,18 +13,23 @@ import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
+import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
+import LogoutIcon from '@mui/icons-material/Logout';
 import Logo from '../components/Logo';
+import { useAuth } from '../auth';
 import { tk } from '../theme';
 
 const W = 248;
 const nav = [
-  ['Overview', '/app', SpaceDashboardOutlinedIcon], ['Conversations', '/app/conversations', ChatBubbleOutlineIcon],
+  ['Overview', '/app', SpaceDashboardOutlinedIcon], ['Live demo', '/app/demo', PlayCircleOutlineIcon], ['Publish widget', '/app/widget', CodeOutlinedIcon], ['Conversations', '/app/conversations', ChatBubbleOutlineIcon],
   ['Escalation queue', '/app/escalations', SupportAgentOutlinedIcon], ['Knowledge base', '/app/knowledge', MenuBookOutlinedIcon],
   ['Industry packs', '/app/packs', ExtensionOutlinedIcon], ['AI settings', '/app/ai-settings', TuneOutlinedIcon],
   ['Team', '/app/team', GroupOutlinedIcon], ['Settings', '/app/settings', SettingsOutlinedIcon],
 ];
 
 function SidebarContent({ onNavigate }) {
+  const { user, logout } = useAuth();
   return (
     <Box sx={{ bgcolor: tk.navy, height: '100%', color: '#fff', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ p: 2.5, height: 64, display: 'flex', alignItems: 'center' }}><Link to="/" style={{ textDecoration: 'none' }}><Logo light /></Link></Box>
@@ -40,8 +45,9 @@ function SidebarContent({ onNavigate }) {
         ))}
       </List>
       <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, borderTop: '1px solid #26364F' }}>
-        <Avatar sx={{ bgcolor: tk.teal, width: 36, height: 36 }}>DB</Avatar>
-        <Box><Typography sx={{ fontSize: 14, fontWeight: 600 }}>Dalitso Banda</Typography><Typography sx={{ fontSize: 12, color: '#94A3B8' }}>Owner, demo workspace</Typography></Box>
+        <Avatar sx={{ bgcolor: tk.teal, width: 36, height: 36 }}>{(user?.name || '?').slice(0, 2).toUpperCase()}</Avatar>
+        <Box><Typography sx={{ fontSize: 14, fontWeight: 600 }}>{user?.name}</Typography><Typography sx={{ fontSize: 12, color: '#94A3B8' }}>{user?.email}</Typography></Box>
+        <IconButton onClick={logout} aria-label="Sign out" sx={{ ml: 'auto', color: '#CBD5E1' }}><LogoutIcon fontSize="small" /></IconButton>
       </Box>
     </Box>
   );

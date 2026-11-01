@@ -2,10 +2,21 @@ import { useState } from 'react';
 import { Box, Typography, Grid, TextField, MenuItem, Button, Alert, Stack } from '@mui/material';
 import { wrap } from '../components/PageHero';
 import { tk } from '../theme';
+import { api } from '../api';
 
 export default function Contact() {
   const [sent, setSent] = useState(false);
-  const submit = (e) => { e.preventDefault(); setSent(true); };
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const submit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    setBusy(true); setErr('');
+    try {
+      await api('/api/contact', { method: 'POST', body: { name: f.get('name'), email: f.get('email'), business: f.get('business'), industry: f.get('industry'), agents: f.get('agents'), contactMethod: f.get('contactMethod'), message: f.get('message') } });
+      setSent(true);
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  };
   return (
     <Box sx={{ bgcolor: tk.subtle, py: { xs: 6, md: 9 } }}>
       <Box sx={wrap}>
@@ -24,18 +35,19 @@ export default function Contact() {
               ) : (
                 <Box component="form" onSubmit={submit}>
                   <Stack spacing={2.5}>
-                    <TextField label="Full name" required fullWidth />
-                    <TextField label="Work email" type="email" required fullWidth />
-                    <TextField label="Business name" required fullWidth />
-                    <TextField select label="Industry" defaultValue="Banking" fullWidth>
+                    <TextField name="name" label="Full name" required fullWidth />
+                    <TextField name="email" label="Work email" type="email" required fullWidth />
+                    <TextField name="business" label="Business name" required fullWidth />
+                    <TextField select name="industry" label="Industry" defaultValue="Banking" fullWidth>
                       {['Banking', 'Telecom', 'SME', 'Other'].map((o) => <MenuItem key={o} value={o}>{o}</MenuItem>)}
                     </TextField>
-                    <TextField label="Number of support agents" type="number" fullWidth />
-                    <TextField select label="Preferred contact method" defaultValue="Email" fullWidth>
+                    <TextField name="agents" label="Number of support agents" type="number" fullWidth />
+                    <TextField select name="contactMethod" label="Preferred contact method" defaultValue="Email" fullWidth>
                       {['Email', 'Phone', 'WhatsApp'].map((o) => <MenuItem key={o} value={o}>{o}</MenuItem>)}
                     </TextField>
-                    <TextField label="What would you like to improve? (optional)" multiline minRows={3} fullWidth />
-                    <Button type="submit" variant="contained" size="large">Request a demo</Button>
+                    <TextField name="message" label="What would you like to improve? (optional)" multiline minRows={3} fullWidth />
+                    {err && <Alert severity="error" sx={{ borderRadius: 2 }}>{err}</Alert>}
+                    <Button type="submit" variant="contained" size="large" disabled={busy}>{busy ? 'Sending…' : 'Request a demo'}</Button>
                   </Stack>
                 </Box>
               )}
