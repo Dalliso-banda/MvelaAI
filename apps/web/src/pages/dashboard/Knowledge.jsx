@@ -36,7 +36,7 @@ export default function Knowledge() {
         </Box>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setEdit({ ...empty })} sx={{ flexShrink: 0, ml: 2 }}>Add article</Button>
       </Stack>
-      <Alert severity="info" sx={{ mb: 3, borderRadius: 2 }}>The sample articles contain made-up fees and limits for the demo bank. Replace them with your client's real policies.</Alert>
+      <Alert severity="info" sx={{ mb: 3, borderRadius: 2 }}>Add what customers ask most: prices, opening hours, policies and how-tos. The AI answers only from what is written here.</Alert>
       <ApiError error={error} />
       {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
       {loading && !data ? <Loading /> : (

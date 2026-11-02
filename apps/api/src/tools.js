@@ -2,6 +2,8 @@
 // opens a ticket for a person. customerId always comes from the verified session, never
 // from model-supplied arguments, so one customer can never query another's data.
 import { db, now, audit } from './db.js';
+import * as bank from './bank.js';
+import { runCustomTool } from './customtools.js';
 
 export const money = (ngwee) => 'K' + (ngwee / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -12,8 +14,6 @@ const FAILURES = {
   NETWORK_TIMEOUT: ['the mobile network did not confirm the transfer in time', 'If you were debited, the amount is normally reversed automatically within 24 hours. A human agent can trace it if not.'],
   RECIPIENT_LIMIT_EXCEEDED: ['the recipient wallet has reached its receiving limit', 'Ask the recipient to check their wallet limit, or try a smaller amount.'],
 };
-
-const ownedAccountIds = (customerId) => db.prepare('SELECT id FROM accounts WHERE customer_id=?').all(customerId).map((r) => r.id);
 
 function txView(t) {
   return {
@@ -26,45 +26,40 @@ function txView(t) {
 }
 
 const impl = {
-  get_account_summary(ctx) {
-    const rows = db.prepare('SELECT type, number_masked, currency, balance_ngwee, status FROM accounts WHERE customer_id=?').all(ctx.customerId);
+  // Customer data comes from the bank adapter (local demo data or the bank's API) and is always scoped to ctx.customerId.
+  async get_account_summary(ctx) {
+    const rows = await bank.getAccounts(ctx.customerId, ctx);
     return { accounts: rows.map((a) => ({ type: a.type, account: a.number_masked, balance: money(a.balance_ngwee), currency: a.currency, status: a.status })) };
   },
 
-  get_recent_transactions(ctx, { limit = 5 } = {}) {
-    const ids = ownedAccountIds(ctx.customerId);
-    if (!ids.length) return { transactions: [] };
+  async get_recent_transactions(ctx, { limit = 5 } = {}) {
     const n = Math.min(Math.max(parseInt(limit, 10) || 5, 1), 10);
-    const rows = db.prepare(`SELECT t.*, a.type || ' ' || a.number_masked AS account_label FROM transactions t JOIN accounts a ON a.id=t.account_id
-      WHERE t.account_id IN (${ids.map(() => '?').join(',')}) ORDER BY t.created_at DESC LIMIT ?`).all(...ids, n);
+    const rows = await bank.getTransactions(ctx.customerId, { limit: n }, ctx);
     return { transactions: rows.map(txView) };
   },
 
-  get_transaction_status(ctx, { reference, status } = {}) {
-    const ids = ownedAccountIds(ctx.customerId);
-    if (!ids.length) return { found: false };
-    const inIds = ids.map(() => '?').join(',');
-    const base = `SELECT t.*, a.type || ' ' || a.number_masked AS account_label FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.account_id IN (${inIds})`;
+  async get_transaction_status(ctx, { reference, status } = {}) {
     let row;
-    if (reference) row = db.prepare(`${base} AND upper(t.id)=upper(?)`).get(...ids, String(reference).trim());
+    if (reference) row = await bank.getTransaction(ctx.customerId, String(reference).trim(), ctx);
     else {
       // Prefer the status the customer asked about; otherwise any failed/pending/reversed one.
-      if (['failed', 'pending', 'reversed'].includes(status)) row = db.prepare(`${base} AND t.status=? ORDER BY t.created_at DESC LIMIT 1`).get(...ids, status);
-      row ??= db.prepare(`${base} AND t.status IN ('failed','pending','reversed') ORDER BY t.created_at DESC LIMIT 1`).get(...ids);
+      if (['failed', 'pending', 'reversed'].includes(status)) [row] = await bank.getTransactions(ctx.customerId, { limit: 1, statuses: [status] }, ctx);
+      if (!row) [row] = await bank.getTransactions(ctx.customerId, { limit: 1, statuses: ['failed', 'pending', 'reversed'] }, ctx);
     }
     if (!row) return { found: false, note: reference ? 'No transaction with that reference on this customer\'s accounts.' : 'No failed, pending or reversed transactions found recently.' };
     return { found: true, transaction: txView(row) };
   },
 
-  get_card_status(ctx) {
-    const rows = db.prepare('SELECT last4, status, expiry FROM cards WHERE customer_id=?').all(ctx.customerId);
+  async get_card_status(ctx) {
+    const rows = await bank.getCards(ctx.customerId, ctx);
     return { cards: rows.map((c) => ({ card: `**** ${c.last4}`, status: c.status, expires: c.expiry })) };
   },
 
-  search_knowledge(_ctx, { query = '' } = {}) {
+  search_knowledge(ctx, { query = '' } = {}) {
+    if (!ctx.companyId) return { results: [] }; // knowledge always belongs to one company
     const terms = String(query).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOP.has(w));
     if (!terms.length) return { results: [] };
-    const rows = db.prepare('SELECT id, title, body, tags FROM knowledge').all();
+    const rows = db.prepare('SELECT id, title, body, tags FROM knowledge WHERE company_id=?').all(ctx.companyId);
     const scored = rows.map((r) => {
       const hay = `${r.title} ${r.tags}`.toLowerCase(), body = r.body.toLowerCase();
       let s = 0; for (const w of terms) { if (hay.includes(w)) s += 3; if (body.includes(w)) s += 1; }
@@ -79,8 +74,9 @@ const impl = {
     const msgs = db.prepare("SELECT role, content FROM messages WHERE conversation_id=? AND kind='chat' ORDER BY id DESC LIMIT 6").all(ctx.conversationId).reverse();
     const summary = msgs.map((m) => `${m.role === 'customer' ? 'Customer' : 'AI'}: ${m.content}`).join('\n').slice(0, 1500);
     const p = ['low', 'normal', 'high'].includes(priority) ? priority : 'normal';
-    const r = db.prepare('INSERT INTO escalations (conversation_id, reason, priority, summary, created_at) VALUES (?,?,?,?,?)')
-      .run(ctx.conversationId, String(reason).slice(0, 300), p, summary, now());
+    const cid = db.prepare('SELECT company_id FROM conversations WHERE id=?').get(ctx.conversationId)?.company_id ?? 1;
+    const r = db.prepare('INSERT INTO escalations (conversation_id, company_id, reason, priority, summary, created_at) VALUES (?,?,?,?,?,?)')
+      .run(ctx.conversationId, cid, String(reason).slice(0, 300), p, summary, now());
     db.prepare("UPDATE conversations SET status='escalated', updated_at=? WHERE id=?").run(now(), ctx.conversationId);
     return { escalated: true, ticket: Number(r.lastInsertRowid) };
   },
@@ -91,17 +87,25 @@ const STOP = new Set(['the', 'and', 'for', 'what', 'how', 'can', 'you', 'your', 
 // Tools that need a verified customer. search_knowledge is public info only.
 const NEEDS_AUTH = new Set(['get_account_summary', 'get_recent_transactions', 'get_transaction_status', 'get_card_status']);
 
-export function runTool(name, args, ctx) {
+export async function runTool(name, args, ctx) {
+  if (/^lookup_/.test(name)) {
+    // A company's own lookup (see customtools.js). Only the argument NAMES go in the audit log, not customer-supplied values.
+    const out = await runCustomTool(ctx, name, args || {});
+    ctx.used?.push(name);
+    audit(ctx.conversationId, ctx.customerId, 'ai', `tool:${name}`, { args: Object.keys(args || {}), ok: !out.error });
+    return out;
+  }
   if (!impl[name]) return { error: `Unknown tool ${name}` };
   if (NEEDS_AUTH.has(name) && !ctx.customerId) return { error: 'Customer is not verified.' };
   try {
-    const out = impl[name](ctx, args || {});
+    const out = await impl[name](ctx, args || {});
     ctx.used?.push(name);
     audit(ctx.conversationId, ctx.customerId, 'ai', `tool:${name}`, { args: args || {}, ok: true });
     return out;
   } catch (e) {
-    audit(ctx.conversationId, ctx.customerId, 'ai', `tool:${name}`, { args: args || {}, ok: false, error: e.message });
-    return { error: 'Tool failed' };
+    audit(ctx.conversationId, ctx.customerId, 'ai', `tool:${name}`, { args: args || {}, ok: false, error: String(e.message).slice(0, 200) });
+    // The model and the customer only ever see this, never the raw error.
+    return { error: 'The bank system is not responding right now. Say so plainly, do not guess, and offer a human agent.' };
   }
 }
 

@@ -1,0 +1,11 @@
+{
+  "name": "mvela-mockbank",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env server.js",
+    "start": "node --env-file-if-exists=.env server.js"
+  },
+  "dependencies": { "express": "^4.19.2" }
+}

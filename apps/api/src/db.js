@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,3 +79,39 @@ export function audit(conversationId, customerId, actor, action, detail) {
   db.prepare('INSERT INTO audit_logs (conversation_id, customer_id, actor, action, detail, created_at) VALUES (?,?,?,?,?,?)')
     .run(conversationId ?? null, customerId ?? null, actor, action, detail == null ? null : JSON.stringify(detail), now());
 }
+
+// ------------------------------------------------------------------ companies (multi-tenant)
+// Every company that signs up gets its own row here. Conversations, knowledge, escalations, users and
+// connectors all carry a company_id, and every dashboard query filters on it.
+db.exec(`
+CREATE TABLE IF NOT EXISTS companies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, widget_key TEXT NOT NULL UNIQUE,
+  mode TEXT NOT NULL DEFAULT 'standard', enabled INTEGER NOT NULL DEFAULT 0, color TEXT NOT NULL DEFAULT '#155EEF',
+  allowed_domains TEXT NOT NULL DEFAULT '', welcome TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS connectors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL REFERENCES companies(id),
+  name TEXT NOT NULL, description TEXT NOT NULL, url_template TEXT NOT NULL, params TEXT NOT NULL DEFAULT '[]',
+  auth_header TEXT, auth_secret_enc TEXT, fields TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, UNIQUE (company_id, name)
+);
+`);
+function addColumn(table, col, ddl) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+}
+// Existing rows (from before companies existed) become company 1 through the DEFAULT.
+for (const t of ['conversations', 'knowledge', 'escalations']) addColumn(t, 'company_id', 'INTEGER NOT NULL DEFAULT 1');
+db.exec('CREATE INDEX IF NOT EXISTS idx_conv_company ON conversations(company_id, created_at DESC); CREATE INDEX IF NOT EXISTS idx_kb_company ON knowledge(company_id); CREATE INDEX IF NOT EXISTS idx_esc_company ON escalations(company_id)');
+
+/** Company 1 is the original business ("sample" mode: demo bank data, OTP verification). Created once; adopts old widget settings. */
+(function ensureDefaultCompany() {
+  if (db.prepare('SELECT 1 FROM companies WHERE id=1').get()) return;
+  let old = null;
+  try { old = db.prepare('SELECT * FROM widget_settings WHERE id=1').get(); } catch { /* table does not exist on a fresh database */ }
+  db.prepare('INSERT INTO companies (id, name, widget_key, mode, enabled, color, allowed_domains, created_at, updated_at) VALUES (1,?,?,?,?,?,?,?,?)')
+    .run(old?.name || process.env.BUSINESS_NAME || 'Demo Bank Zambia', old?.widget_key || 'wk_' + crypto.randomBytes(12).toString('hex'), 'sample',
+      old?.enabled ?? 0, old?.color || '#155EEF', old?.allowed_domains || '', now(), now());
+})();
+
+export const getCompany = (id) => db.prepare('SELECT * FROM companies WHERE id=?').get(id);
+export const companyByKey = (key) => (key ? db.prepare('SELECT * FROM companies WHERE widget_key=?').get(String(key)) : null);
