@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
-import { db, now, audit } from './db.js';
+import { db, now, audit, getCompany } from './db.js';
 import { runTool } from './tools.js';
 import { redact, riskCheck, detectIntent, detectLanguage, extractPhone, extractOtp, TOPIC_BY_INTENT, scrubOutput } from './guardrails.js';
 import { llmEnabled, llmProvider, runLLM } from './llm.js';
+import { lookupCustomerByPhone } from './bank.js';
+import { deliverOtp, channelWords } from './delivery.js';
 
 const BUSINESS = () => process.env.BUSINESS_NAME || 'Demo Bank Zambia';
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -20,44 +22,52 @@ const patch = (id, fields) => {
 const addMessage = (conversationId, role, kind, content, latency = null) =>
   db.prepare('INSERT INTO messages (conversation_id, role, kind, content, latency_ms, created_at) VALUES (?,?,?,?,?,?)').run(conversationId, role, kind, content, latency, now());
 
-export function createConversation({ channel = 'web' } = {}) {
+export function createConversation({ channel = 'web', companyId = 1 } = {}) {
   const id = crypto.randomUUID();
-  db.prepare('INSERT INTO conversations (id, channel, created_at, updated_at) VALUES (?,?,?,?)').run(id, channel, now(), now());
-  const greeting = `Hello, I'm Mvela, ${BUSINESS()}'s virtual assistant. I can help with balances, recent transactions, failed or pending transfers and general questions, in English, Bemba or Nyanja. How can I help?`;
+  const company = getCompany(companyId) || getCompany(1);
+  db.prepare('INSERT INTO conversations (id, channel, company_id, created_at, updated_at) VALUES (?,?,?,?,?)').run(id, channel, company.id, now(), now());
+  const greeting = company.mode === 'standard'
+    ? (company.welcome || `Hello! I'm ${company.name}'s virtual assistant. How can I help you today?`)
+    : `Hello, I'm Mvela, ${BUSINESS()}'s virtual assistant. I can help with balances, recent transactions, failed or pending transfers and general questions, in English, Bemba or Nyanja. How can I help?`;
   addMessage(id, 'assistant', 'flow', greeting);
   audit(id, null, 'system', 'conversation_started', { channel });
   return { id, greeting };
 }
 
 // ---------------------------------------------------------------- OTP
-function deliverOtp(phone, code) {
-  // TODO(prod): send via an SMS provider (e.g. Africa's Talking / Twilio). Never log codes in production.
-  if (process.env.OTP_DEMO !== 'false') return { demoOtp: code };
-  return {};
-}
-
-function startOtp(conv, phone) {
+async function startOtp(conv, phone) {
   const submissions = db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE conversation_id=? AND action LIKE 'otp_requested%'").get(conv.id).c;
   if (submissions >= MAX_PHONE_SUBMISSIONS) {
     audit(conv.id, null, 'system', 'otp_rate_limited');
     return { text: 'Too many verification attempts on this chat. For your security I can\'t continue. Please start a new chat later, or ask for a human agent.', kind: 'flow' };
   }
-  const customer = db.prepare('SELECT * FROM customers WHERE phone=?').get(phone);
+  // Ask the bank (demo data or its real API, via the job queue) whether this number belongs to a customer.
+  let customer = null;
+  try {
+    customer = await lookupCustomerByPhone(phone, { conversationId: conv.id });
+  } catch (e) {
+    audit(conv.id, null, 'system', 'bank_lookup_failed', { error: String(e.message).slice(0, 200) });
+    console.warn('[bank] customer lookup failed:', e.message);
+    return { text: "I can't reach our verification service right now, so I can't send you a code. Please try again in a minute, or say 'speak to a human'.", kind: 'flow' };
+  }
   let extra = {};
   if (customer) {
+    // Keep a local reference row so conversations and the dashboard can point at this customer.
+    db.prepare('INSERT OR IGNORE INTO customers (id, name, phone, language, created_at) VALUES (?,?,?,?,?)').run(customer.id, customer.name, phone, 'English', now());
     const code = String(crypto.randomInt(100000, 1000000));
     db.prepare('UPDATE otps SET used=1 WHERE conversation_id=? AND used=0').run(conv.id);
     db.prepare('INSERT INTO otps (conversation_id, customer_id, code_hash, expires_at, created_at) VALUES (?,?,?,?,?)')
       .run(conv.id, customer.id, sha(code, conv.id), new Date(Date.now() + OTP_TTL_MS).toISOString(), now());
-    extra = deliverOtp(phone, code);
-    audit(conv.id, customer.id, 'system', 'otp_requested', { phone: maskPhone(phone) });
+    extra = await deliverOtp({ customer: { ...customer, phone }, code, conversationId: conv.id, business: BUSINESS() });
+    audit(conv.id, customer.id, 'system', 'otp_requested', { phone: maskPhone(phone), sent: extra.sent, failed: extra.failed });
+    if (extra.failed.length) console.warn('[otp] delivery problem:', JSON.stringify(extra.failed));
   } else {
     // Same response either way so the chat can't be used to discover which numbers are customers.
     audit(conv.id, null, 'system', 'otp_requested_unknown', { phone: maskPhone(phone) });
   }
   patch(conv.id, { state: 'awaiting_otp', pending_phone: phone });
   const demo = extra.demoOtp ? `\n\nDemo mode: no SMS is sent, so your code is ${extra.demoOtp}.` : '';
-  return { text: `If ${maskPhone(phone)} is registered with us, I've sent a 6-digit code to it. Please type the code here. It expires in 5 minutes. (Never share your PIN or password with anyone.)${demo}`, kind: 'flow', ...extra };
+  return { text: `If ${maskPhone(phone)} is registered with us, I've sent a 6-digit code${channelWords()} to the contact details we have on file. Please type the code here. It expires in 5 minutes. (Never share your PIN or password with anyone.)${demo}`, kind: 'flow', ...(extra.demoOtp ? { demoOtp: extra.demoOtp } : {}) };
 }
 
 async function verifyOtp(conv, code) {
@@ -91,49 +101,61 @@ const RISK_REPLY = {
   card_action: "For your security I can't block, unblock or replace cards myself. I've sent this to a human agent as a priority and they'll verify you and take care of it.",
   out_of_scope: "I can't move money or change account details; I'm read-only for your safety. I've passed this to a human agent who can help.",
 };
-function escalateFor(conv, risk) {
-  runTool('escalate_to_human', { reason: `${risk.type.replace('_', ' ')} (auto-detected)`, priority: risk.priority }, ctxOf(conv));
+async function escalateFor(conv, risk) {
+  await runTool('escalate_to_human', { reason: `${risk.type.replace('_', ' ')} (auto-detected)`, priority: risk.priority }, ctxOf(conv));
   return { text: RISK_REPLY[risk.type], kind: 'chat', topic: TOPIC_BY_INTENT[risk.type], escalated: true };
 }
-const ctxOf = (conv) => ({ conversationId: conv.id, customerId: conv.customer_id, used: [] });
+const ctxOf = (conv) => ({ conversationId: conv.id, customerId: conv.customer_id, companyId: conv.company_id, used: [] });
 
 // ---------------------------------------------------------------- rules engine (no LLM)
 const lines = (arr) => arr.join('\n');
 const txLine = (t) => `• ${t.reference}: ${t.direction === 'debit' ? '-' : '+'}${t.amount} ${t.counterparty ? (t.direction === 'debit' ? 'to ' : 'from ') + t.counterparty : t.type} via ${t.channel}, ${t.status.toUpperCase()}, ${t.date.slice(0, 10)}`;
 
-function rulesAnswer(conv, text) {
+async function unavailable(ctx, topic) {
+  await runTool('escalate_to_human', { reason: 'Bank system unavailable while answering', priority: 'normal' }, ctx);
+  return { text: "I'm having trouble reaching the bank's system right now, so I can't check that. I've passed this to a human agent so you won't need to repeat yourself.", topic, escalated: true };
+}
+
+async function rulesAnswer(conv, text) {
   const ctx = ctxOf(conv);
   const name = first(db.prepare('SELECT name FROM customers WHERE id=?').get(conv.customer_id).name);
   const intent = detectIntent(text);
   const topic = TOPIC_BY_INTENT[intent];
-  const kb = () => runTool('search_knowledge', { query: text }, ctx).results;
+  const kb = async () => (await runTool('search_knowledge', { query: text }, ctx)).results;
 
   if (intent === 'greeting') return { text: `Hello ${name}. What would you like help with?`, topic, answered: false };
   if (intent === 'thanks') return { text: 'You\'re welcome. Anything else I can help with?', topic, answered: false };
   if (intent === 'balance') {
-    const { accounts } = runTool('get_account_summary', {}, ctx);
+    const sum = await runTool('get_account_summary', {}, ctx);
+    if (sum.error) return unavailable(ctx, topic);
+    const { accounts } = sum;
     return { text: lines(['Here are your balances:', ...accounts.map((a) => `• ${a.type} ${a.account}: ${a.balance}${a.status !== 'active' ? ` (${a.status})` : ''}`)]), topic, answered: true };
   }
   if (intent === 'transactions') {
-    const { transactions } = runTool('get_recent_transactions', { limit: 5 }, ctx);
+    const list = await runTool('get_recent_transactions', { limit: 5 }, ctx);
+    if (list.error) return unavailable(ctx, topic);
+    const { transactions } = list;
     return { text: transactions.length ? lines(['Your latest transactions:', ...transactions.map(txLine)]) : 'I couldn\'t find any recent transactions.', topic, answered: true };
   }
   if (intent === 'transaction_status') {
     const ref = (text.match(/TXN-\d+/i) || [])[0];
     const wanted = /fail|didn'?t (go|arrive|receive|reach)|not (received|delivered|arrive|reach)/i.test(text) ? 'failed' : /pending|stuck/i.test(text) ? 'pending' : /revers|refund/i.test(text) ? 'reversed' : undefined;
-    const r = runTool('get_transaction_status', ref ? { reference: ref } : { status: wanted }, ctx);
+    const r = await runTool('get_transaction_status', ref ? { reference: ref } : { status: wanted }, ctx);
+    if (r.error) return unavailable(ctx, topic);
     if (!r.found) return { text: `${r.note} If you give me the reference number (it looks like TXN-100234) I can look it up directly.`, topic, answered: true };
     const t = r.transaction;
     return { text: lines([`${t.reference}: ${t.amount} ${t.direction === 'debit' ? 'to' : 'from'} ${t.counterparty ?? t.type} via ${t.channel} on ${t.date.slice(0, 10)} is ${t.status.toUpperCase()}.`,
       t.failure_reason ? `Reason: ${t.failure_reason}.` : '', t.next_step ? `Next step: ${t.next_step}` : '']).replace(/\n+$/g, '').replace(/\n{2,}/g, '\n'), topic, answered: true };
   }
   if (intent === 'card_status') {
-    const { cards } = runTool('get_card_status', {}, ctx);
+    const cs = await runTool('get_card_status', {}, ctx);
+    if (cs.error) return unavailable(ctx, topic);
+    const { cards } = cs;
     return { text: cards.length ? lines(['Your cards:', ...cards.map((c) => `• ${c.card}: ${c.status}, expires ${c.expires}`)]) : 'There are no cards on your profile.', topic, answered: true };
   }
-  const hits = kb();
+  const hits = await kb();
   if (hits.length && hits[0].score >= 3) return { text: `${hits[0].answer}`, topic: 'General enquiry', answered: true };
-  runTool('escalate_to_human', { reason: 'AI could not answer: ' + text.slice(0, 120), priority: 'low' }, ctx);
+  await runTool('escalate_to_human', { reason: 'AI could not answer: ' + text.slice(0, 120), priority: 'low' }, ctx);
   return { text: "I couldn't find a reliable answer to that, so I've passed it to a human agent rather than guess. They'll pick it up from this chat.", topic: 'General enquiry', escalated: true };
 }
 
@@ -153,7 +175,7 @@ async function verifiedAnswer(conv, text) {
       console.warn('[llm] FELL BACK to the rules agent:', e.message);
     }
   }
-  const r = rulesAnswer(conv, text);
+  const r = await rulesAnswer(conv, text);
   audit(conv.id, conv.customer_id, 'ai', 'reply', { mode: 'rules' });
   return r;
 }
@@ -161,7 +183,7 @@ async function verifiedAnswer(conv, text) {
 // Before verification the model gets no account tools, only the public knowledge base and escalation.
 async function publicAnswer(conv) {
   if (!llmEnabled()) return null;
-  const ctx = { conversationId: conv.id, customerId: null, used: [] };
+  const ctx = { conversationId: conv.id, customerId: null, companyId: conv.company_id, used: [] };
   try {
     const history = db.prepare("SELECT role, content FROM messages WHERE conversation_id=? AND kind='chat' ORDER BY id DESC LIMIT 12").all(conv.id).reverse();
     const text = await runLLM({ history, ctx, name: 'a visitor', language: conv.language, business: BUSINESS(), publicMode: true });
@@ -172,6 +194,29 @@ async function publicAnswer(conv) {
     console.warn('[llm] FELL BACK to the scripted reply (public mode):', e.message);
     return null;
   }
+}
+
+// Companies on the standard plan: no bank data, no OTP. Knowledge base, their own lookups, and escalation.
+async function standardAnswer(conv, company, safeText) {
+  const ctx = { conversationId: conv.id, customerId: null, companyId: conv.company_id, mode: 'standard', used: [] };
+  if (llmEnabled()) {
+    try {
+      const history = db.prepare("SELECT role, content FROM messages WHERE conversation_id=? AND kind='chat' ORDER BY id DESC LIMIT 12").all(conv.id).reverse();
+      const out = await runLLM({ history, ctx, name: 'a visitor', language: conv.language, business: company.name });
+      const escalated = ctx.used.includes('escalate_to_human');
+      audit(conv.id, null, 'ai', 'reply', { mode: llmProvider(), standard: true, tools: ctx.used });
+      return { text: out, kind: 'chat', topic: 'General enquiry', answered: !escalated, escalated };
+    } catch (e) {
+      audit(conv.id, null, 'system', 'llm_error_fallback', { error: String(e.message).slice(0, 200), standard: true });
+      console.warn('[llm] FELL BACK to the knowledge base (standard company):', e.message);
+    }
+  }
+  const intent = detectIntent(safeText);
+  if (intent === 'greeting') return { text: `Hello! I'm ${company.name}'s virtual assistant. What can I help you with?`, kind: 'chat', topic: 'General enquiry' };
+  const hits = (await runTool('search_knowledge', { query: safeText }, ctx)).results;
+  audit(conv.id, null, 'ai', 'reply', { mode: 'rules', standard: true });
+  if (hits.length && hits[0].score >= 3) return { text: hits[0].answer, kind: 'chat', topic: 'General enquiry', answered: true };
+  return { text: "I couldn't find that in our information. Say 'speak to a human' and I'll pass you to someone who can help.", kind: 'chat', topic: 'General enquiry' };
 }
 
 // ---------------------------------------------------------------- main entry
@@ -192,11 +237,16 @@ export async function handleMessage(conversationId, rawText) {
   let reply;
   let customerKind = 'flow';
 
-  if (risk && !(otpMode && code)) {
+  const company = getCompany(conv.company_id) || getCompany(1);
+  if (company.mode === 'standard') {
+    customerKind = 'chat';
+    addMessage(conv.id, 'customer', 'chat', storedText);
+    reply = risk ? await escalateFor(conv, risk) : await standardAnswer(conv, company, safe);
+  } else if (risk && !(otpMode && code)) {
     customerKind = 'chat';
     // store first so the escalation summary includes this message
     addMessage(conv.id, 'customer', customerKind, storedText);
-    reply = escalateFor(conv, risk);
+    reply = await escalateFor(conv, risk);
   } else if (conv.state === 'verified') {
     customerKind = 'chat';
     addMessage(conv.id, 'customer', customerKind, storedText);
@@ -209,17 +259,17 @@ export async function handleMessage(conversationId, rawText) {
       reply = await verifyOtp(conv, code);
     } else if (phone) {
       addMessage(conv.id, 'customer', 'flow', storedText);
-      reply = startOtp(conv, phone);
+      reply = await startOtp(conv, phone);
     } else if (otpMode && /resend|again|new code/i.test(text) && conv.pending_phone) {
       addMessage(conv.id, 'customer', 'flow', storedText);
-      reply = startOtp(conv, conv.pending_phone);
+      reply = await startOtp(conv, conv.pending_phone);
     } else if (otpMode) {
       addMessage(conv.id, 'customer', 'flow', storedText);
       reply = { text: 'Please type the 6-digit code I sent, or say "resend" for a new one.', kind: 'flow' };
     } else {
       const intent = detectIntent(safe);
       const accountish = ['balance', 'transactions', 'transaction_status', 'card_status'].includes(intent);
-      const kbHit = !accountish && intent !== 'greeting' ? runTool('search_knowledge', { query: safe }, { conversationId: conv.id, customerId: null }).results : [];
+      const kbHit = !accountish && intent !== 'greeting' ? (await runTool('search_knowledge', { query: safe }, { conversationId: conv.id, customerId: null, companyId: conv.company_id })).results : [];
       if (kbHit.length && kbHit[0].score >= 3) {
         addMessage(conv.id, 'customer', 'chat', storedText);
         audit(conv.id, null, 'ai', 'reply', { mode: 'kb_public' });

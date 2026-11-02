@@ -10,6 +10,7 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import SupportAgentOutlinedIcon from '@mui/icons-material/SupportAgentOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
@@ -23,7 +24,7 @@ import { tk } from '../theme';
 const W = 248;
 const nav = [
   ['Overview', '/app', SpaceDashboardOutlinedIcon], ['Live demo', '/app/demo', PlayCircleOutlineIcon], ['Publish widget', '/app/widget', CodeOutlinedIcon], ['Conversations', '/app/conversations', ChatBubbleOutlineIcon],
-  ['Escalation queue', '/app/escalations', SupportAgentOutlinedIcon], ['Knowledge base', '/app/knowledge', MenuBookOutlinedIcon],
+  ['Escalation queue', '/app/escalations', SupportAgentOutlinedIcon], ['Knowledge base', '/app/knowledge', MenuBookOutlinedIcon], ['Lookups', '/app/connectors', HubOutlinedIcon],
   ['Industry packs', '/app/packs', ExtensionOutlinedIcon], ['AI settings', '/app/ai-settings', TuneOutlinedIcon],
   ['Team', '/app/team', GroupOutlinedIcon], ['Settings', '/app/settings', SettingsOutlinedIcon],
 ];

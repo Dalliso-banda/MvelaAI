@@ -33,7 +33,7 @@ export default function Login() {
             </Stack>
           </Box>
         </Card>
-        <Typography sx={{ mt: 2, textAlign: 'center', fontSize: 14, color: tk.n500 }}>Accounts are created by the Mvela team for your business.</Typography>
+        <Typography sx={{ mt: 2, textAlign: 'center', fontSize: 14, color: tk.n500 }}>New here? <Link to="/signup">Create your company account</Link></Typography>
       </Box>
     </Box>
   );

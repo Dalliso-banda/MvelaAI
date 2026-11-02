@@ -9,6 +9,8 @@ import Escalations from './pages/dashboard/Escalations';
 import Knowledge from './pages/dashboard/Knowledge';
 import ComingSoon from './pages/ComingSoon';
 import Login from './pages/Login';
+import Signup from './pages/Signup';
+import Connectors from './pages/dashboard/Connectors';
 import Embed from './pages/Embed';
 import Widget from './pages/dashboard/Widget';
 import { Protected } from './auth';
@@ -34,6 +36,7 @@ export default function App() {
         <Route path="*" element={<ComingSoon title="This page is next" />} />
       </Route>
       <Route path="/login" element={<Login />} />
+      <Route path="/signup" element={<Signup />} />
       <Route path="/embed" element={<Embed />} />
       <Route path="/app" element={<Protected><DashboardLayout /></Protected>}>
         <Route index element={<Overview />} />
@@ -41,6 +44,7 @@ export default function App() {
         <Route path="conversations" element={<Conversations />} />
         <Route path="escalations" element={<Escalations />} />
         <Route path="knowledge" element={<Knowledge />} />
+        <Route path="connectors" element={<Connectors />} />
         <Route path="widget" element={<Widget />} />
         <Route path="*" element={<ComingSoon title="This screen is next" />} />
       </Route>

@@ -28,7 +28,7 @@ export default function Embed() {
         setCfg(c);
         let saved = null; try { saved = sessionStorage.getItem(SKEY); } catch { /* ignore */ }
         if (saved) { try { const d = await api(`/api/chat/${saved}`); setConv(d.id); setMsgs(d.messages.map((m) => ({ role: m.role, content: m.content }))); return; } catch { /* start fresh */ } }
-        const s = await api('/api/chat/start', { method: 'POST', body: {} });
+        const s = await api('/api/chat/start', { method: 'POST', body: { key: KEY } });
         setConv(s.conversationId); setMsgs([{ role: 'assistant', content: s.greeting }]);
         try { sessionStorage.setItem(SKEY, s.conversationId); } catch { /* ignore */ }
       } catch (e) { setFail(e.message); }
