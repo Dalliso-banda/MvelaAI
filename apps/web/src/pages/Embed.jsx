@@ -45,6 +45,13 @@ export default function Embed() {
       return r.reply;
     } catch (x) { setMsgs((m) => [...m, { role: 'system', content: x.message }]); return ''; } finally { setBusy(false); }
   }
+  // Voice: send one recorded utterance to our API, which has Meta's Muse Voice Transcribe turn it into text.
+  async function transcribe(blob) {
+    const res = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/voice/transcribe?conversationId=${encodeURIComponent(conv)}`, { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: blob });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Voice is not working right now. You can still type.');
+    return d.text || '';
+  }
   async function send(e) {
     e.preventDefault();
     const t = text.trim(); if (!t) return;
@@ -71,7 +78,7 @@ export default function Embed() {
           <div ref={end} />
         </Stack>
       </Box>
-      <VoiceCall onUtterance={submit} color={c} disabled={!conv} />
+      <VoiceCall onUtterance={submit} transcribe={transcribe} color={c} disabled={!conv} />
       <Stack direction="row" spacing={1} component="form" onSubmit={send} sx={{ p: 1.5, borderTop: '1px solid #E2E8F0' }}>
         <TextField value={text} onChange={(e) => setText(e.target.value)} placeholder="Type your message…" size="small" fullWidth autoComplete="off" inputProps={{ 'aria-label': 'Message', maxLength: 1000, style: { fontSize: 16 } }} />
         <IconButton type="submit" disabled={busy || !text.trim()} aria-label="Send" sx={{ color: c }}><SendIcon /></IconButton>

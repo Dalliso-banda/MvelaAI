@@ -8,6 +8,7 @@ import { authRouter, requireAuth, userFromRequest } from './auth.js';
 import { listConnectors, saveConnector, deleteConnector, testConnector } from './customtools.js';
 import { teamRouter, settingsRouter, aiRouter, accountRouter, requireRole } from './companyadmin.js';
 import { widgetAdmin, widgetPublic } from './widget.js';
+import { mountVoice } from './voice.js';
 
 const r = Router();
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -36,6 +37,9 @@ r.post('/chat/start', chatLimiter, (req, res) => {
   const { id, greeting } = createConversation({ companyId: c.id });
   res.status(201).json({ conversationId: id, greeting });
 });
+
+// Voice: Muse Voice Transcribe turns a recorded utterance into text; the widget then sends that text to /chat.
+mountVoice(r, { limiter: rateLimit({ windowMs: 60_000, limit: Number(process.env.VOICE_RATE_LIMIT) || 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many voice messages, slow down.' } }), wrap });
 
 r.post('/chat', chatLimiter, wrap(async (req, res) => {
   const { conversationId, message } = req.body || {};
