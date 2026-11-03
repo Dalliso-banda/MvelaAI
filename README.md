@@ -200,7 +200,11 @@ The API test suite covers verification and code limits, customer and company iso
 ## Repository layout
 
 ```
-apps/api       Express API: agents, tools, auth, companies, widget, voice, connectors, job queue, tests
+apps/api
+  src/routes/  Route composition, public endpoints, and admin endpoints grouped by resource
+    admin/      Overview, conversations, escalations, knowledge, and connector routes
+  src/          API services and integrations (agent, auth, database, tools, voice, etc.)
+  test/         API and integration tests
 apps/web       React + MUI: marketing site, dashboard, chat widget, and voice call
 apps/mockbank  Stand-in bank REST API for testing the adapter
 docs           Connectors and multi-company notes
