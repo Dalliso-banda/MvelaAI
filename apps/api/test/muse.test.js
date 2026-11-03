@@ -2,7 +2,6 @@ process.env.NODE_ENV = 'test';
 process.env.DB_FILE = ':memory:';
 process.env.OTP_DEMO = 'true';
 process.env.CHAT_RATE_LIMIT = '10000';
-delete process.env.GEMINI_API_KEY;
 delete process.env.META_API_KEY;
 
 import { test, before, after } from 'node:test';
@@ -26,12 +25,11 @@ async function verified(phone) {
   return id;
 }
 
-test('provider selection: Muse wins when both keys exist; LLM_PROVIDER overrides', () => {
+test('provider: Muse when META_API_KEY is set, otherwise the rules agent; no other provider', () => {
   assert.equal(llmProvider(), null);
-  process.env.GEMINI_API_KEY = 'g'; assert.equal(llmProvider(), 'gemini');
+  process.env.LLM_PROVIDER = 'other'; assert.equal(llmProvider(), null); // no other provider exists
   process.env.META_API_KEY = 'm'; assert.equal(llmProvider(), 'muse');
-  process.env.LLM_PROVIDER = 'gemini'; assert.equal(llmProvider(), 'gemini');
-  delete process.env.LLM_PROVIDER; delete process.env.GEMINI_API_KEY; delete process.env.META_API_KEY;
+  delete process.env.LLM_PROVIDER; delete process.env.META_API_KEY;
 });
 
 test('Muse tool loop: OpenAI-format tool call is executed for the verified customer only, result fed back', async () => {

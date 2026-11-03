@@ -3,7 +3,6 @@ process.env.DB_FILE = ':memory:';
 process.env.ADMIN_EMAIL = 'owner@test.local';
 process.env.ADMIN_PASSWORD = 'correct-horse-9';
 process.env.CLIENT_ORIGIN = 'http://localhost:5173';
-delete process.env.GEMINI_API_KEY;
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';

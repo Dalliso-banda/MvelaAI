@@ -6,6 +6,7 @@ import { llmEnabled, llmProvider } from './llm.js';
 import { DEMO_CUSTOMERS, seedAll } from './seed.js';
 import { authRouter, requireAuth, userFromRequest } from './auth.js';
 import { listConnectors, saveConnector, deleteConnector, testConnector } from './customtools.js';
+import { teamRouter, settingsRouter, aiRouter, accountRouter, requireRole } from './companyadmin.js';
 import { widgetAdmin, widgetPublic } from './widget.js';
 
 const r = Router();
@@ -73,12 +74,20 @@ admin.use(requireAuth);
 // Every query below filters by req.user.companyId. A company can never read or change another company's data.
 const visitor = (req) => (getCompany(req.user.companyId)?.mode === 'sample' ? 'Unverified visitor' : 'Visitor');
 const platformOnly = (req, res, next) => (getCompany(req.user.companyId)?.mode === 'sample' ? next() : res.status(403).json({ error: 'Not available.' }));
-admin.use('/widget', widgetAdmin);
+// Roles: owner and admin manage the company; agents work conversations and escalations.
+const adminOnly = requireRole('owner', 'admin');
+admin.use('/widget', adminOnly, widgetAdmin);
+admin.use('/team', adminOnly, teamRouter);
+admin.use('/settings', adminOnly, settingsRouter);
+admin.use('/ai-settings', adminOnly, aiRouter);
+admin.use('/account', accountRouter);
+admin.use('/connectors', adminOnly);
+admin.use('/knowledge', (req, res, next) => (req.method === 'GET' ? next() : adminOnly(req, res, next)));
 
 admin.get('/overview', (req, res) => {
   const days = int(req.query.days, 7, 1, 90);
   const since = new Date(Date.now() - days * 864e5).toISOString();
-  const handle = Number(process.env.HANDLE_MINUTES) || 6;
+  const handle = getCompany(req.user.companyId)?.handle_minutes || Number(process.env.HANDLE_MINUTES) || 6;
   const cid = req.user.companyId;
   const total = db.prepare('SELECT COUNT(*) c FROM conversations WHERE company_id=? AND created_at>=?').get(cid, since).c;
   const by = Object.fromEntries(db.prepare('SELECT status, COUNT(*) c FROM conversations WHERE company_id=? AND created_at>=? GROUP BY status').all(cid, since).map((x) => [x.status, x.c]));
@@ -93,7 +102,7 @@ admin.get('/overview', (req, res) => {
   res.json({
     days, conversations: total, aiResolutionRate: finished ? Math.round((aiResolved / finished) * 100) : null,
     avgResponseSeconds: lat == null ? null : Math.round(lat / 100) / 10,
-    hoursSaved: Math.round(((aiResolved * handle) / 60) * 10) / 10, hoursSavedBasis: `${handle} min per AI-resolved conversation (assumption, set HANDLE_MINUTES)`,
+    hoursSaved: Math.round(((aiResolved * handle) / 60) * 10) / 10, hoursSavedBasis: `${handle} min per AI-resolved conversation (assumption, change it in Settings)`,
     openEscalations: db.prepare("SELECT COUNT(*) c FROM escalations WHERE company_id=? AND status='open'").get(cid).c,
     languages: langs.map((l) => ({ language: l.language, count: l.c, percent: total ? Math.round((l.c / total) * 100) : 0 })),
     topics: topics.map((t) => ({ topic: t.topic, count: t.c })),

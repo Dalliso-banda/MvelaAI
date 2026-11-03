@@ -3,7 +3,6 @@ process.env.DB_FILE = ':memory:';
 process.env.CHAT_RATE_LIMIT = '10000';
 process.env.SIGNUP_RATE_LIMIT = '1000';
 process.env.LOGIN_RATE_LIMIT = '1000';
-delete process.env.GEMINI_API_KEY;
 delete process.env.META_API_KEY;
 
 import { test, before, after } from 'node:test';
