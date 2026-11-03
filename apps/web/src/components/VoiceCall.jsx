@@ -3,12 +3,12 @@ import { Box, Button, Typography } from '@mui/material';
 import { keyframes } from '@mui/system';
 import CallIcon from '@mui/icons-material/Call';
 import CallEndIcon from '@mui/icons-material/CallEnd';
+import { captureSupported, openMic } from '../lib/voiceCapture';
 
-// Browser voice call: speech-to-text -> your chat endpoint -> text-to-speech, turn by turn.
-// Works in Chrome, Edge and Safari. English only (browsers do not offer Bemba/Nyanja speech yet).
-// Needs HTTPS (or localhost) for the microphone.
-const Rec = typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
-export const voiceSupported = () => Boolean(Rec) && typeof window !== 'undefined' && 'speechSynthesis' in window;
+// Voice call: the microphone is recorded in the browser, each utterance is sent to our API and transcribed by Meta's
+// Muse Voice Transcribe, the text goes through the same agents as typed chat, and the reply is read aloud with the
+// browser's text-to-speech (Meta has no text-to-speech model yet). Needs HTTPS (or localhost) for the microphone.
+export const voiceSupported = () => typeof window !== 'undefined' && captureSupported() && 'speechSynthesis' in window;
 const pulse = keyframes`0%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.4}100%{transform:scale(1);opacity:1}`;
 
 /** Make text sound right when read aloud. */
@@ -23,17 +23,17 @@ export function speechText(t) {
     .trim();
 }
 
-export default function VoiceCall({ onUtterance, color = '#155EEF', disabled = false, lang = 'en-GB', greeting = "Hello, I'm listening. How can I help?" }) {
+export default function VoiceCall({ onUtterance, transcribe, color = '#155EEF', disabled = false, lang = 'en-GB', greeting = "Hello, I'm listening. How can I help?" }) {
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState('idle'); // idle | listening | thinking | speaking
   const [heard, setHeard] = useState('');
   const [error, setError] = useState('');
   const activeRef = useRef(false);
   const gen = useRef(0);
-  const recRef = useRef(null);
+  const micRef = useRef(null);
   const skip = useRef(false);
   const props = useRef({});
-  props.current = { onUtterance, lang, greeting };
+  props.current = { onUtterance, transcribe, lang, greeting };
 
   const speak = useCallback((text) => new Promise((resolve) => {
     const synth = window.speechSynthesis;
@@ -62,61 +62,53 @@ export default function VoiceCall({ onUtterance, color = '#155EEF', disabled = f
     next();
   }), []);
 
-  const fail = useCallback((msg) => { setError(msg); activeRef.current = false; gen.current++; setActive(false); setStatus('idle'); }, []);
+  const stopAll = useCallback(() => {
+    activeRef.current = false;
+    gen.current++;
+    try { micRef.current?.close(); } catch { /* ignore */ }
+    micRef.current = null;
+    window.speechSynthesis?.cancel();
+    setActive(false); setStatus('idle'); setHeard('');
+  }, []);
+  const fail = useCallback((msg) => { setError(msg); stopAll(); }, [stopAll]);
 
-  const listen = useCallback(function listen() {
-    if (!activeRef.current) return;
-    const g = ++gen.current;
-    const rec = new Rec();
-    recRef.current = rec;
-    rec.lang = props.current.lang;
-    rec.interimResults = true;
-    rec.continuous = false;
-    let handled = false;
-    setStatus('listening');
-    rec.onresult = (e) => {
-      let interim = '', fin = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) (e.results[i].isFinal ? (fin += e.results[i][0].transcript) : (interim += e.results[i][0].transcript));
-      setHeard(fin || interim);
-      if (fin.trim() && !handled) {
-        handled = true;
-        try { rec.stop(); } catch { /* ignore */ }
-        (async () => {
-          setStatus('thinking');
-          let reply = '';
-          try { reply = await props.current.onUtterance(fin.trim()); } catch { /* the chat shows the error */ }
-          if (!activeRef.current || gen.current !== g) return;
-          setHeard('');
-          if (reply) await speak(reply);
-          listen();
-        })();
+  // One turn at a time: listen, transcribe with Muse, ask the agents, speak the reply.
+  const loop = useCallback(async (g) => {
+    let misses = 0;
+    while (activeRef.current && gen.current === g) {
+      setStatus('listening');
+      const blob = await micRef.current.listen();
+      if (!activeRef.current || gen.current !== g) return;
+      if (!blob) continue;
+      setStatus('thinking');
+      let text = '';
+      try { text = (await props.current.transcribe(blob)).trim(); misses = 0; }
+      catch (e) {
+        if (++misses >= 3) return fail(e.message || 'Voice is not working right now. You can still type.');
+        continue;
       }
-    };
-    rec.onerror = (e) => {
-      if (e.error === 'no-speech' || e.error === 'aborted') return;
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') fail('Microphone is blocked. Allow it for this site, then try again.');
-      else if (e.error === 'network') fail('Voice needs an internet connection.');
-      else fail('Voice error: ' + e.error);
-    };
-    rec.onend = () => { if (!handled && activeRef.current && gen.current === g) setTimeout(() => { if (activeRef.current && gen.current === g) listen(); }, 250); };
-    try { rec.start(); } catch { /* already started */ }
+      if (!activeRef.current || gen.current !== g) return;
+      if (!text) continue;
+      setHeard(text);
+      let reply = '';
+      try { reply = await props.current.onUtterance(text); } catch { /* the chat shows the error */ }
+      if (!activeRef.current || gen.current !== g) return;
+      setHeard('');
+      if (reply) await speak(reply);
+    }
   }, [speak, fail]);
 
   const start = async () => {
     setError('');
+    try { micRef.current = await openMic(); }
+    catch { setError('Microphone is blocked. Allow it for this site, then try again.'); return; }
     activeRef.current = true;
     setActive(true);
+    const g = ++gen.current;
     await speak(props.current.greeting); // runs inside the click, which browsers require for audio
-    listen();
+    loop(g);
   };
-  const end = useCallback(() => {
-    activeRef.current = false;
-    gen.current++;
-    try { recRef.current?.abort(); } catch { /* ignore */ }
-    window.speechSynthesis?.cancel();
-    setActive(false); setStatus('idle'); setHeard('');
-  }, []);
-  useEffect(() => end, [end]);
+  useEffect(() => stopAll, [stopAll]);
 
   if (!voiceSupported()) return null;
 
@@ -138,7 +130,7 @@ export default function VoiceCall({ onUtterance, color = '#155EEF', disabled = f
         <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: status === 'listening' ? '#15803D' : color, animation: `${pulse} 1.4s ease-in-out infinite` }} />
         <Typography sx={{ flex: 1, fontSize: 14, fontWeight: 600 }}>{label}</Typography>
         {status === 'speaking' && <Button size="small" onClick={() => { skip.current = true; window.speechSynthesis.cancel(); }}>Skip</Button>}
-        <Button size="small" color="error" variant="contained" startIcon={<CallEndIcon />} onClick={end}>End call</Button>
+        <Button size="small" color="error" variant="contained" startIcon={<CallEndIcon />} onClick={stopAll}>End call</Button>
       </Box>
       {heard && <Typography sx={{ fontSize: 13.5, color: '#475569', mt: 0.75, fontStyle: 'italic' }}>“{heard}”</Typography>}
     </Box>
