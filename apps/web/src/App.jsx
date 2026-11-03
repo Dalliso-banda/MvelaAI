@@ -11,6 +11,9 @@ import ComingSoon from './pages/ComingSoon';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Connectors from './pages/dashboard/Connectors';
+import Team from './pages/dashboard/Team';
+import AiSettings from './pages/dashboard/AiSettings';
+import Settings from './pages/dashboard/Settings';
 import Embed from './pages/Embed';
 import Widget from './pages/dashboard/Widget';
 import { Protected } from './auth';
@@ -45,6 +48,9 @@ export default function App() {
         <Route path="escalations" element={<Escalations />} />
         <Route path="knowledge" element={<Knowledge />} />
         <Route path="connectors" element={<Connectors />} />
+        <Route path="team" element={<Team />} />
+        <Route path="ai-settings" element={<AiSettings />} />
+        <Route path="settings" element={<Settings />} />
         <Route path="widget" element={<Widget />} />
         <Route path="*" element={<ComingSoon title="This screen is next" />} />
       </Route>

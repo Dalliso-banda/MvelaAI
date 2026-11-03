@@ -2,7 +2,6 @@ process.env.NODE_ENV = 'test';
 process.env.DB_FILE = ':memory:';
 process.env.CHAT_RATE_LIMIT = '10000';
 process.env.MOCKBANK_API_KEY = 'test-key';
-delete process.env.GEMINI_API_KEY;
 delete process.env.META_API_KEY;
 
 import { test, before, after } from 'node:test';

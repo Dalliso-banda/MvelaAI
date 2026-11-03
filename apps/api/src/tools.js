@@ -109,7 +109,7 @@ export async function runTool(name, args, ctx) {
   }
 }
 
-// Declarations in Gemini functionDeclarations format.
+// Tool declarations (name, description, JSON-schema parameters). llm.js wraps them in the OpenAI function format Muse uses.
 export const TOOL_DECLARATIONS = [
   { name: 'get_account_summary', description: "Balances and status of the verified customer's accounts.", parameters: { type: 'object', properties: {} } },
   { name: 'get_recent_transactions', description: "The verified customer's most recent transactions across all accounts.", parameters: { type: 'object', properties: { limit: { type: 'integer', description: 'How many (1-10). Default 5.' } } } },

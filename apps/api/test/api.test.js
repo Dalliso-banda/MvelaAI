@@ -4,7 +4,6 @@ process.env.OTP_DEMO = 'true';
 process.env.CHAT_RATE_LIMIT = '10000';
 process.env.ADMIN_EMAIL = 'owner@test.local';
 process.env.ADMIN_PASSWORD = 'correct-horse-9';
-delete process.env.GEMINI_API_KEY;
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -163,43 +162,4 @@ test('contact form stores a lead and validates input', async () => {
 test('admin routes reject missing or invalid sign-in', async () => {
   assert.equal((await fetch(base + '/admin/overview', { headers: { authorization: 'Bearer nope' } })).status, 401);
   assert.equal((await fetch(base + '/admin/overview')).status, 200); // test helper adds the owner token
-});
-
-test('Gemini tool loop: model calls a tool, server executes it scoped to the verified customer', async () => {
-  const id = await verified('0976000006');
-  process.env.GEMINI_API_KEY = 'test-key';
-  const real = globalThis.fetch;
-  let calls = 0, sawResult = null;
-  globalThis.fetch = async (url, init) => {
-    if (!String(url).includes('generativelanguage')) return real(url, init);
-    calls++;
-    const body = JSON.parse(init.body);
-    if (calls === 1) {
-      assert.ok(body.tools[0].functionDeclarations.length >= 5);
-      // model tries to smuggle in another customer's id: must be ignored
-      return new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'get_account_summary', args: { customerId: 'C001' } } }] } }] }));
-    }
-    sawResult = body.contents.at(-1).parts[0].functionResponse.response.result;
-    return new Response(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'You have two accounts.' }] } }] }));
-  };
-  try {
-    const r = await chat(id, 'how much money do i have');
-    assert.equal(r.reply, 'You have two accounts.');
-    assert.equal(sawResult.accounts.length, 2);
-    const own = db.prepare("SELECT number_masked FROM accounts WHERE customer_id='C006' AND type='savings'").get().number_masked;
-    assert.ok(sawResult.accounts.some((a) => a.account === own));
-  } finally { globalThis.fetch = real; }
-});
-
-test('Gemini outage falls back to the rules agent instead of failing the customer', async () => {
-  const id = await verified('0976000007');
-  process.env.GEMINI_API_KEY = 'test-key';
-  const real = globalThis.fetch;
-  globalThis.fetch = async (url, init) => String(url).includes('generativelanguage') ? new Response('quota', { status: 429 }) : real(url, init);
-  try {
-    const r = await chat(id, 'what is my balance');
-    assert.match(r.reply, /K\d/);
-    const logged = db.prepare("SELECT 1 FROM audit_logs WHERE conversation_id=? AND action='llm_error_fallback'").get(id);
-    assert.ok(logged);
-  } finally { globalThis.fetch = real; delete process.env.GEMINI_API_KEY; }
 });

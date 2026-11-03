@@ -15,7 +15,7 @@ Open http://localhost:5173/app/demo. The first start creates `apps/api/data/mvel
 Try this: type "my mobile money transfer failed", then `0976 000 001`, then the 6-digit code shown in the chat.
 
 ```bash
-npm test          # 17 end-to-end API tests (verification, isolation, redaction, escalation, Gemini loop)
+npm test          # 17 end-to-end API tests (verification, isolation, redaction, escalation, Muse loop)
 npm run seed      # wipe and re-seed the demo data
 ```
 
@@ -24,10 +24,10 @@ npm run seed      # wipe and re-seed the demo data
 The agent runs on a built-in rules engine with no key. For natural language in English, Bemba and Nyanja:
 
 1. Get a free key at https://aistudio.google.com/apikey
-2. Put it in `apps/api/.env` as `GEMINI_API_KEY=...`
-3. Restart. The API log says `agent: Gemini (...)`.
+2. Put it in `apps/api/.env` as `META_API_KEY=...`
+3. Restart. The API log says `agent: Meta Muse (...)`.
 
-If Gemini is down or rate-limited, the customer still gets an answer from the rules engine and the failure is written to the audit log.
+If Muse is down or rate-limited, the customer still gets an answer from the rules engine and the failure is written to the audit log.
 
 ## How the agent is built
 
@@ -36,7 +36,7 @@ customer message
   -> redact PINs / card numbers
   -> risk check (fraud, complaint, card block, "send money", wants a human)  -> escalate immediately
   -> not verified?  phone number -> OTP -> verified   (server state machine, the LLM is not involved)
-  -> verified: Gemini (or rules) answers using TOOLS
+  -> verified: Muse agents (or rules) answers using TOOLS
         get_account_summary / get_recent_transactions / get_transaction_status / get_card_status   (read-only)
         search_knowledge
         escalate_to_human  (the only write: it opens a ticket)
@@ -73,7 +73,7 @@ Why this is safe to show a bank:
 - **Sign-in is basic.** One owner account (from `ADMIN_EMAIL` / `ADMIN_PASSWORD`), password login, 12-hour sessions, login rate limit. There is no password reset, no invites and no roles yet, and it is still one business (no multi-tenancy).
 - **"Hours saved" is an estimate** (AI-resolved conversations x `HANDLE_MINUTES`). The UI labels it as such. "AI resolved" means the AI answered and nothing was escalated; it is not customer-confirmed.
 - **Voice calls, WhatsApp, SMS are not built.** Chat only. The agent core (`handleMessage`) is channel-independent, so those are adapters on top.
-- **Bemba/Nyanja:** language detection is a small keyword heuristic, and replies in those languages come from Gemini only (the rules fallback answers in English). The sample Bemba/Nyanja lines in seeded history are placeholders and need a native speaker's review.
+- **Bemba/Nyanja:** language detection is a small keyword heuristic, and replies in those languages come from Muse only (the rules fallback answers in English). The sample Bemba/Nyanja lines in seeded history are placeholders and need a native speaker's review.
 - **SQLite** is right for a prototype or pilot. Move to Postgres before real volume.
 
 
