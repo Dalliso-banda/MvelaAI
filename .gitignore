@@ -149,3 +149,5 @@ vite.config.ts.timestamp-*
 .turbo
 node_modules
 .DS_Store
+
+apps/demoshop/.env
