@@ -129,3 +129,26 @@ test('MULTI_AGENT=false makes exactly one model call for a plain reply', async (
     assert.equal(m.calls.specialist.length, 1);
   } finally { m.restore(); delete process.env.META_API_KEY; delete process.env.MULTI_AGENT; }
 });
+
+test('Muse Spark reasoning can use up the token budget: the call is retried once with more room and minimal reasoning; helpers ask for minimal reasoning', async () => {
+  const id = await verified('0976000003');
+  process.env.META_API_KEY = 'k'; process.env.MULTI_AGENT = 'true';
+  const seenBodies = [];
+  const m = fakeMuse({
+    triage: (n, body) => { seenBodies.push(['triage', body]); return reply('{"intent":"other","urgency":"low"}'); },
+    specialist: (n, body) => { seenBodies.push(['specialist', body]); return n === 1
+      ? new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { role: 'assistant', content: null } }] }))
+      : reply('Hello there, 2 minutes to go.'); },
+    reviewer: (n, body) => { seenBodies.push(['reviewer', body]); return reply('{"verdict":"ok","issues":[]}'); },
+  });
+  try {
+    const r = await chat(id, 'hello');
+    assert.equal(r.reply, 'Hello there, 2 minutes to go.');
+    const by = (who) => seenBodies.filter(([w]) => w === who).map(([, b]) => b);
+    assert.equal(by('triage')[0].reasoning_effort, 'minimal');
+    assert.equal(by('reviewer')[0].reasoning_effort, 'minimal');
+    const [first, second] = by('specialist');
+    assert.equal(first.reasoning_effort, 'low'); assert.equal(first.max_tokens, 1500);
+    assert.equal(second.reasoning_effort, 'minimal'); assert.equal(second.max_tokens, 4500);
+  } finally { m.restore(); delete process.env.META_API_KEY; delete process.env.MULTI_AGENT; }
+});
