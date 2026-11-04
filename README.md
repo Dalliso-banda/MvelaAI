@@ -1,11 +1,13 @@
 # Mvela AI
 
-**AI-powered customer support for businesses with a website.** Mvela helps small and medium-sized businesses, startups, and other teams answer common customer questions, make support available beyond business hours, and hand conversations to a person when needed. Add your business information, publish a chat widget on your site, and let customers get help by text or voice.
+**AI-powered customer support for businesses with a website.** Mvela helps small and medium-sized businesses, startups, and other teams answer common customer questions, make support available beyond business hours, and hand conversations to a person when needed.
 
 Built for the Meta AI Developer Hackathon. The AI models used by this project are Meta Muse Spark and Muse Voice Transcribe.
 
 - **Demo video (3 min):** `[add link]`
 - **Live site:** [https://artasylum.xyz](https://artasylum.xyz)
+- **Create an account:** [https://artasylum.xyz/signup](https://artasylum.xyz/signup)
+- **Demo shop guide:** [apps/demoshop/README.md](apps/demoshop/README.md)
 - **Team:** Dalitso Banda
 
 > All data in this repository is synthetic. There are no real customers, accounts, or bank records.
@@ -16,7 +18,7 @@ Built for the Meta AI Developer Hackathon. The AI models used by this project ar
 
 | Before the hackathon | Built during the hackathon |
 |---|---|
-| A front-end prototype: marketing pages, dashboard screens and a chat-widget design, running on mock data with no back end and no AI. | The whole working product: the API and database, company sign-up and isolation, the Muse-powered agents (triage, specialist with tools, reviewer), Muse Voice Transcribe voice calls, the publishable widget, team roles, AI settings, company Lookups with their safety checks, verification codes and message delivery, the sample bank and mock bank API, the demo shop, the tests, and the deployment on artasylum.xyz. |
+| A front-end prototype: marketing pages, dashboard screens and a chat-widget design, running on mock data with no back end and no AI. | The whole working product: the API and database, company sign-up, AI-powered support, voice, integrations, and the dashboard. |
 
 The git history shows the order of work.
 
@@ -24,7 +26,7 @@ The git history shows the order of work.
 
 ## The problem
 
-Many businesses rely on a small team to answer the same questions about products, services, opening hours, pricing, policies, and order status. When support staff are busy or unavailable, customers can be left waiting. Mvela gives businesses a website chat assistant for routine questions, with a way to escalate conversations that need a person.
+Many businesses rely on a small team to answer the same questions about products, services, opening hours, pricing, policies, and order status. When support staff are busy or unavailable, customers wait or give up.
 
 ## What Mvela does
 
@@ -36,7 +38,7 @@ Many businesses rely on a small team to answer the same questions about products
 | Order and stock answers from the business's own system | Connect order or stock systems as read-only Lookups |
 | No need to repeat the conversation when a request is escalated | Configure team roles, assistant name, and tone |
 
-Mvela is intended as a general customer-support starting point for SMEs, startups, and other website owners. The included sample bank is a demo integration, not the product's target audience: it uses synthetic data to demonstrate how a business-specific connector could work.
+Mvela is intended as a general customer-support starting point for SMEs, startups, and other website owners. The included sample bank is a demo integration, not the product's target audience: it uses synthetic data to show how the assistant can interact with a business system.
 
 There are two company modes in the app:
 
@@ -60,7 +62,7 @@ Model calls go to the Meta Model API (`https://api.meta.ai/v1`, set by `META_API
 | Muse Spark reviewer | Same model or `META_REVIEW_MODEL` | Meta's API | Checks a draft answer against available evidence and response rules, and approves, rewrites, or blocks it. |
 | Muse Voice Transcribe | `muse-voice-transcribe-1.0` (`META_STT_MODEL`) | Meta's API | Transcribes audio for voice conversations. |
 
-The triage agent classifies the request, the specialist drafts a response and may use tools, and the reviewer checks the response. Triage and review are best-effort; if either fails, the specialist's response can still be returned. If Muse is unavailable or `META_API_KEY` is empty, the app can use its rules-based fallback, which is plain code and not an AI model.
+The triage agent classifies the request, the specialist drafts a response and may use tools, and the reviewer checks the response. Triage and review are best-effort; if either fails, the specialist still answers.
 
 ### Features that do not use an AI model
 
@@ -156,7 +158,7 @@ curl -s https://api.meta.ai/v1/chat/completions \
 
 The API log also says `FELL BACK to the rules agent` if a model call fails.
 
-**Try a business workspace:** Sign up at `/signup`, add a few entries under **Knowledge base**, open **Live demo**, and ask about them. To try the website widget, open **Publish widget**, switch it on, and add the provided snippet to a website.
+**Try a business workspace:** Sign up at `/signup`, add a few entries under **Knowledge base**, open **Live demo**, and ask about them. To try the website widget, open **Publish widget**, switch it on, copy the snippet, and add it to a test page.
 
 **Try the sample bank:** Sign in as the admin (company 1), open **Live demo**, and ask "what is my balance?". This demo uses synthetic data; `GET /api/demo/customers` lists the demo customers.
 
@@ -164,7 +166,9 @@ The API log also says `FELL BACK to the rules agent` if a model call fails.
 
 ### Try Lookups with the demo shop
 
-`apps/demoshop` is a fake online shop ("Chalo Threads") with made-up orders `TZ-1001` to `TZ-1006` and a small stock API. It shows how a company connects its own system, so the assistant can answer "where is my order?".
+[`apps/demoshop/README.md`](apps/demoshop/README.md) has the complete demo shop setup and Lookups instructions.
+
+`apps/demoshop` is a fake online shop ("Chalo Threads") with made-up orders `TZ-1001` to `TZ-1006` and a small stock API. It shows how a company connects its own system, so the assistant can answer order and stock questions. It is not required to run Mvela.
 
 1. `cp apps/demoshop/.env.example apps/demoshop/.env`
 2. In Mvela, sign up, open **Publish widget**, switch it on, and put the key in `WIDGET_KEY` in `apps/demoshop/.env`.
@@ -179,7 +183,7 @@ The API log also says `FELL BACK to the rules agent` if a model call fails.
 | Customer provides | `order_id` | `item` |
 | Fields the AI may share | `order_id, status, estimated_delivery, carrier, tracking_number, delay_reason, refund_status, pickup_location, items` | `item, in_stock, sizes, price_zmw, restock` |
 
-Try: "Where is TZ-1001?", "Why is TZ-1004 late?", "What happened to TZ-1005?", "Is the winter coat in stock?". The shop's order API also returns a customer email and an internal note; they are not in the allowed fields, so they never reach the AI. The play button on a lookup shows exactly what the AI would see. More detail is in `apps/demoshop/README.md`.
+Try: "Where is TZ-1001?", "Why is TZ-1004 late?", "What happened to TZ-1005?", "Is the winter coat in stock?". The shop's order API also returns a customer email and an internal note; they are not returned to the AI.
 
 ### Production
 
@@ -220,7 +224,7 @@ See `apps/api/.env.example` for all settings, and `docs/` for details on connect
 npm test
 ```
 
-The API test suite covers verification and code limits, customer and company isolation, redaction, escalation, sign-in and roles, the widget, connector safety, the multi-agent flow, voice transcription (with Meta's service mocked), and the demo shop.
+The API test suite covers verification and code limits, customer and company isolation, redaction, escalation, sign-in and roles, the widget, connector safety, the multi-agent flow, voice transcription, and bank adapters.
 
 ## Security and privacy design
 
@@ -237,7 +241,7 @@ The API test suite covers verification and code limits, customer and company iso
 - Browser voice output depends on the device's built-in speech synthesis; quality varies by device.
 - Voice and chat quality depend on Meta's API being reachable; if it is not, the app falls back to the simpler rules-based assistant.
 - The assistant's answers depend on the quality and coverage of the business's knowledge entries and configured lookups.
-- Standard companies do not have customer sign-in. Configure lookups to expose only low-risk information; an order number alone is a weak check, so do not expose personal data without adding an appropriate verification flow.
+- Standard companies do not have customer sign-in. Configure lookups to expose only low-risk information; an order number alone is a weak check, so do not expose personal data without adding an appropriate verification step.
 - Data is stored in SQLite, suitable for a pilot on one server with backups; larger deployments may need PostgreSQL and additional operational work.
 - "Hours saved" on the overview is an estimate, not a measured result.
 - Knowledge search is keyword-based and matches words rather than meaning.
